@@ -78,53 +78,56 @@ void printBoard() {
 
 void updateBoard(int move) {
     if (move < 1 || move > 9) return;
+    if (board[move - 1] == 'X' || board[move - 1] == 'O') return; // Already taken
     board[move - 1] = (turn == 1) ? 'X' : 'O';
     turn = 1 - turn;
     printBoard();
 }
 
-void listenForMoves() {
-    FILE* fp = popen("mosquitto_sub -h 104.198.150.251 -t move", "r");
-    if (!fp) {
-        perror("mosquitto_sub failed");
-        return;
-    }
-
-    char line[128];
-    resetBoard();
-    printBoard();
-
-    while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\r\n")] = 0; // remove newline
-
-        if (strncmp(line, "X wins", 6) == 0 || strncmp(line, "O wins", 6) == 0 || strncmp(line, "Draw", 4) == 0) {
-            printf("\nGame Over: %s\n", line);
-            break;
-        }
-
-        int move = atoi(line);
-        if (move >= 1 && move <= 9) {
-            updateBoard(move);
-        }
-    }
-
-    pclose(fp);
-}
-
 void sendMove() {
     int move;
-    char cmd[128];
+    char pubCmd[128];
+    char subCmd[256];
+    char result[64];
+    FILE* fp;
 
     while (1) {
         printf("Enter your move (1–9): ");
         scanf("%d", &move);
+
         if (move < 1 || move > 9) {
-            printf("Invalid move.\n");
+            printf("Invalid move. Try again.\n");
             continue;
         }
 
-        snprintf(cmd, sizeof(cmd), "mosquitto_pub -h 104.198.150.251 -t player/move -m \"%d\"", move);
-        system(cmd);
+        // Send move to ESP32
+        snprintf(pubCmd, sizeof(pubCmd), "mosquitto_pub -h 104.198.150.251 -t player/move -m \"%d\"", move);
+        system(pubCmd);
+
+        // Wait for ESP32 to confirm the move or publish a game result
+        snprintf(subCmd, sizeof(subCmd), "mosquitto_sub -h 104.198.150.251 -t move -C 1");
+        fp = popen(subCmd, "r");
+        if (!fp) {
+            perror("Failed to receive response from ESP32");
+            continue;
+        }
+
+        if (fgets(result, sizeof(result), fp) != NULL) {
+            result[strcspn(result, "\r\n")] = 0; // Remove newline
+
+            if (strncmp(result, "X wins", 6) == 0 || strncmp(result, "O wins", 6) == 0 || strncmp(result, "Draw", 4) == 0) {
+                printf("\nGame Over: %s\n", result);
+                pclose(fp);
+                break;
+            }
+
+            int confirmedMove = atoi(result);
+            if (confirmedMove >= 1 && confirmedMove <= 9) {
+                updateBoard(confirmedMove);
+            }
+        }
+
+        pclose(fp);
     }
 }
 
@@ -145,12 +148,9 @@ int main() {
         snprintf(cmd, sizeof(cmd), "mosquitto_pub -h 104.198.150.251 -t esp32/tictac -m \"2\"");
         system(cmd);
 
-        // Start listener in new terminal
-        system("start cmd /k mosquitto_sub -h 104.198.150.251 -t move");
-
         resetBoard();
         printBoard();
-        sendMove(); // Continue sending moves until game ends
+        sendMove(); // Play game
         break;
 
     case 3:
