@@ -1,0 +1,61 @@
+#!/bin/bash
+
+BROKER="104.198.150.251"
+TOPIC="move"
+PUBLISH="player/move"
+
+declare -a board=(' ' ' ' ' ' ' ' ' ' ' ' ' ' ' ' ' ')
+last_symbol=' '
+
+print_board() {
+  echo ""
+  echo "${board[0]} | ${board[1]} | ${board[2]}"
+  echo "--+---+--"
+  echo "${board[3]} | ${board[4]} | ${board[5]}"
+  echo "--+---+--"
+  echo "${board[6]} | ${board[7]} | ${board[8]}"
+  echo ""
+}
+
+mosquitto_sub -h "$BROKER" -t "$TOPIC" | while read move; do
+  if [[ "$move" == *"wins"* || "$move" == "Draw" ]]; then
+    echo "Game over: $move"
+    exit 0
+  fi
+
+  if [[ "$move" =~ ^[1-9]$ ]]; then
+    index=$((move - 1))
+    if [[ "${board[$index]}" == ' ' ]]; then
+      # Assign symbol (alternate: X -> O -> X...)
+      if [[ "$last_symbol" == 'O' || "$last_symbol" == ' ' ]]; then
+        board[$index]='X'
+        last_symbol='X'
+      else
+        board[$index]='O'
+        last_symbol='O'
+      fi
+
+      print_board
+
+      # If last move was X (human), then it's bot's turn (O)
+      if [[ "$last_symbol" == "X" ]]; then
+        open=()
+        for i in {0..8}; do
+          if [[ "${board[$i]}" == ' ' ]]; then
+            open+=($i)
+          fi
+        done
+
+        if (( ${#open[@]} > 0 )); then
+          sleep 2  # simulate bot thinking
+          choice_index=$((RANDOM % ${#open[@]}))
+          chosen_move=$((open[$choice_index] + 1))
+          echo "Bot chooses $chosen_move"
+          board[$chosen_move - 1]='O'
+          last_symbol='O'
+          mosquitto_pub -h "$BROKER" -t "$PUBLISH" -m "$chosen_move"
+        fi
+      fi
+    fi
+  fi
+done
